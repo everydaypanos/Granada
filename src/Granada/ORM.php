@@ -1793,7 +1793,10 @@ class ORM implements ArrayAccess {
     /**
      * Create a cache key for the given query and parameters.
      */
-    protected static function _create_cache_key($query, $parameters) {
+    protected static function _create_cache_key($query, $parameters, $table_name = null, $connection_name = self::DEFAULT_CONNECTION) {
+        if(isset(self::$_config[$connection_name]['create_cache_key']) and is_callable(self::$_config[$connection_name]['create_cache_key'])){
+            return call_user_func_array(self::$_config[$connection_name]['create_cache_key'], array($query, $parameters, $table_name, $connection_name));
+        }
         $parameter_string = join(',', $parameters);
         $key = $query . ':' . $parameter_string;
         return sha1($key);
@@ -1804,8 +1807,10 @@ class ORM implements ArrayAccess {
      * is cached for the key, return the value. Otherwise, return false.
      * @param string $cache_key
      */
-    protected static function _check_query_cache($cache_key, $connection_name = self::DEFAULT_CONNECTION) {
-        if (isset(self::$_query_cache[$connection_name][$cache_key])) {
+    protected static function _check_query_cache($cache_key, $table_name = null, $connection_name = self::DEFAULT_CONNECTION) {
+        if(isset(self::$_config[$connection_name]['check_query_cache']) and is_callable(self::$_config[$connection_name]['check_query_cache'])){
+            return call_user_func_array(self::$_config[$connection_name]['check_query_cache'], array($cache_key, $table_name, $connection_name));
+        } elseif (isset(self::$_query_cache[$connection_name][$cache_key])) {
             return self::$_query_cache[$connection_name][$cache_key];
         }
         return false;
@@ -1814,7 +1819,7 @@ class ORM implements ArrayAccess {
     /**
      * Clear the query cache
      */
-    public static function clear_cache() {
+    public static function clear_cache($table_name = null, $connection_name = self::DEFAULT_CONNECTION) {
         self::$_query_cache = array();
         if(isset(self::$_config[$connection_name]['clear_cache']) and is_callable(self::$_config[$connection_name]['clear_cache'])){
             return call_user_func_array(self::$_config[$connection_name]['clear_cache'], array($table_name, $connection_name));
@@ -1825,8 +1830,10 @@ class ORM implements ArrayAccess {
      * Add the given value to the query cache.
      * @param string $cache_key
      */
-    protected static function _cache_query_result($cache_key, $value, $connection_name = self::DEFAULT_CONNECTION) {
-        if (!isset(self::$_query_cache[$connection_name])) {
+    protected static function _cache_query_result($cache_key, $value, $table_name = null, $connection_name = self::DEFAULT_CONNECTION) {
+        if(isset(self::$_config[$connection_name]['cache_query_result']) and is_callable(self::$_config[$connection_name]['cache_query_result'])){
+            return call_user_func_array(self::$_config[$connection_name]['cache_query_result'], array($cache_key, $value, $table_name, $connection_name));
+        } elseif (!isset(self::$_query_cache[$connection_name])) {
             self::$_query_cache[$connection_name] = array();
         }
         self::$_query_cache[$connection_name][$cache_key] = $value;
@@ -1841,8 +1848,8 @@ class ORM implements ArrayAccess {
         $caching_enabled = self::$_config[$this->_connection_name]['caching'];
 
         if ($caching_enabled) {
-            $cache_key = self::_create_cache_key($query, $this->_values);
-            $cached_result = self::_check_query_cache($cache_key, $this->_connection_name);
+            $cache_key = self::_create_cache_key($query, $this->_values, $this->_table_name, $this->_connection_name);
+            $cached_result = self::_check_query_cache($cache_key, $this->_table_name, $this->_connection_name);
 
             if ($cached_result !== false) {
                 $this->reset();
@@ -1859,7 +1866,7 @@ class ORM implements ArrayAccess {
         }
 
         if ($caching_enabled) {
-            self::_cache_query_result($cache_key, $rows, $this->_connection_name);
+            self::_cache_query_result($cache_key, $rows, $this->_table_name, $this->_connection_name);
         }
 
         // reset Idiorm after executing the query
@@ -2036,7 +2043,7 @@ class ORM implements ArrayAccess {
                 }
             }
         }
-        $this->clear_cache();
+        $this->clear_cache($this->_table_name, $this->_connection_name);
         $this->_dirty_fields = $this->_expr_fields = array();
         return $success;
     }
