@@ -1816,6 +1816,9 @@ class ORM implements ArrayAccess {
      */
     public static function clear_cache() {
         self::$_query_cache = array();
+        if(isset(self::$_config[$connection_name]['clear_cache']) and is_callable(self::$_config[$connection_name]['clear_cache'])){
+            return call_user_func_array(self::$_config[$connection_name]['clear_cache'], array($table_name, $connection_name));
+        }
     }
 
     /**
