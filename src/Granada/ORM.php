@@ -146,6 +146,7 @@ class ORM implements ArrayAccess {
 
     // Array of WHERE clauses
     protected $_where_conditions = array();
+    protected $_where_conditions_stash = array();
 
     // LIMIT
     protected $_limit = null;
@@ -168,6 +169,9 @@ class ORM implements ArrayAccess {
     // Fields that have been modified during the
     // lifetime of the object
     protected $_dirty_fields = array();
+
+    // The data as at hydration time, used for comparison of dirty fields
+    protected $_clean_data = array();
 
     // Fields that are to be inserted in the DB raw
     protected $_expr_fields = array();
@@ -305,9 +309,10 @@ class ORM implements ArrayAccess {
     }
 
     /**
-     * Delete all registered PDO objects in _db array.
+     * Close and delete all registered PDO objects in _db array.
      */
     public static function reset_db() {
+        self::$_db = null;
         self::$_db = array();
     }
 
@@ -541,6 +546,7 @@ class ORM implements ArrayAccess {
     protected function __construct($table_name, $data = array(), $connection_name = self::DEFAULT_CONNECTION) {
         $this->_table_name = $table_name;
         $this->_data = $data;
+        $this->_clean_data = array();
 
         $this->_connection_name = $connection_name;
 
@@ -796,6 +802,7 @@ class ORM implements ArrayAccess {
      */
     public function hydrate($data=array()) {
         $this->_data = $data;
+        $this->_clean_data = array();
         return $this;
     }
 
@@ -1105,6 +1112,30 @@ class ORM implements ArrayAccess {
     }
 
     /**
+     * Save the where conditions and clear
+     * Use pop_where to get them back
+     *
+     * @return ORM
+     */
+    public function stash_where() {
+        $this->_where_conditions_stash = $this->_where_conditions;
+        return $this->clear_where();
+    }
+
+    /**
+     * Reinstate the stashed conditions to the end of the where list
+     *
+     * @return ORM
+     */
+    public function pop_where() {
+        foreach ($this->_where_conditions_stash as $stash) {
+            $this->_where_conditions[] = $stash;
+        }
+        $this->_where_conditions_stash = array();
+        return $this;
+    }
+
+    /**
      * Clear / Reset the WHERE clause(s)
 	 * @return ORM
      */
@@ -1162,6 +1193,27 @@ class ORM implements ArrayAccess {
         }
     }
 
+    /**
+     * Optionally add to a chain
+     * To avoid breaking long chain commands, calls the function only if the first parameter is truthy.
+     * Use like:
+     *  Car::where('id', 3)
+     *    ->onlyif($only_enabled, function($q) {
+     *          return $q->where('enabled', 1);
+     *      });
+     *    ->find_many();
+     *
+     * @param boolean $condition
+     * @param callable $callback
+     * @return self
+     */
+    public function onlyif($condition, $callback) {
+        if ($condition) {
+            return $callback($this);
+        }
+
+        return $this;
+    }
     /**
      * Add a WHERE column = value clause to your query. Each time
      * this is called in the chain, an additional WHERE will be
@@ -1312,6 +1364,42 @@ class ORM implements ArrayAccess {
      */
     public function where_lte($column_name, $value) {
         return $this->_add_simple_where($column_name, '<=', $value);
+    }
+
+    /**
+     * Add a WHERE ... < OR NULL clause to your query
+     * @param string $column_name
+     * @param integer $value
+     */
+    public function where_lt_or_null($column_name, $value) {
+        return $this->where_raw('( ' . $this->_quote_identifier($column_name) . ' < ? OR ' . $this->_quote_identifier($column_name) . ' IS NULL )', $value);
+    }
+
+    /**
+     * Add a WHERE ... < OR NULL clause to your query
+     * @param string $column_name
+     * @param integer $value
+     */
+    public function where_lte_or_null($column_name, $value) {
+        return $this->where_raw('( ' . $this->_quote_identifier($column_name) . ' <= ? OR ' . $this->_quote_identifier($column_name) . ' IS NULL )', $value);
+    }
+
+    /**
+     * Add a WHERE ... < OR NULL clause to your query
+     * @param string $column_name
+     * @param integer $value
+     */
+    public function where_gt_or_null($column_name, $value) {
+        return $this->where_raw('( ' . $this->_quote_identifier($column_name) . ' > ? OR ' . $this->_quote_identifier($column_name) . ' IS NULL )', $value);
+    }
+
+    /**
+     * Add a WHERE ... < OR NULL clause to your query
+     * @param string $column_name
+     * @param integer $value
+     */
+    public function where_gte_or_null($column_name, $value) {
+        return $this->where_raw('( ' . $this->_quote_identifier($column_name) . ' >= ? OR ' . $this->_quote_identifier($column_name) . ' IS NULL )', $value);
     }
 
     /**
@@ -1847,6 +1935,7 @@ class ORM implements ArrayAccess {
         $query = $this->_build_select();
         $caching_enabled = self::$_config[$this->_connection_name]['caching'];
 
+        $cache_key = '';
         if ($caching_enabled) {
             $cache_key = self::_create_cache_key($query, $this->_values, $this->_table_name, $this->_connection_name);
             $cached_result = self::_check_query_cache($cache_key, $this->_table_name, $this->_connection_name);
@@ -1963,8 +2052,27 @@ class ORM implements ArrayAccess {
             $key = array($key => $value);
         }
         foreach ($key as $field => $value) {
+            if ($field == '_isFirstResult') {
+                continue;
+            }
+            if ($field == '_isLastResult') {
+                continue;
+            }
+            if (!array_key_exists($field, $this->_clean_data) && array_key_exists($field, $this->_data)) {
+                // Save the data the first time only
+                $this->_clean_data[$field] = $this->_data[$field];
+            }
+            $oldval = array_key_exists($field, $this->_data) ? $this->_data[$field] : null;
             $this->_data[$field] = $value;
-            $this->_dirty_fields[$field] = $value;
+            $set_as_dirty = $this->is_new() || $expr;
+            if (is_float($value)) {
+                $set_as_dirty = abs($oldval - $value) > 0.00000000000001;
+            } else if ($oldval != $value) {
+                $set_as_dirty = true;
+            }
+            if ($set_as_dirty) {
+                $this->_dirty_fields[$field] = $value;
+            }
             if (false === $expr and isset($this->_expr_fields[$field])) {
                 unset($this->_expr_fields[$field]);
             } else if (true === $expr) {
@@ -1978,17 +2086,50 @@ class ORM implements ArrayAccess {
      * Check whether the given field has been changed since this
      * object was saved.
      * @param string $key
+     * @return bool
      */
     public function is_dirty($key) {
-        return isset($this->_dirty_fields[$key]);
+        return array_key_exists($key, $this->_dirty_fields);
+    }
+
+    /**
+     * Check whether the any field has been changed since this
+     * object was saved.
+     * @return bool
+     */
+    public function is_any_dirty() {
+        return count($this->_dirty_fields) > 0;
     }
 
     /**
      * List the dirty fields that need updating on next save
-	 *
+	 * @return array
      */
     public function list_dirty_fields() {
         return $this->_dirty_fields;
+    }
+
+    /**
+     * Get the clean data for this record before it was made dirty
+	 * @return array
+     */
+    public function clean_values() {
+        return array_merge($this->_data, $this->_clean_data);
+    }
+
+    /**
+     * Get the value of this field when the data was last hydrated
+     * ie before it became dirty
+     * @return mixed
+     */
+    public function clean_value($key) {
+        if (array_key_exists($key, $this->_clean_data)) {
+            return $this->_clean_data[$key];
+        }
+        if (array_key_exists($key, $this->_data)) {
+            return $this->_data[$key];
+        }
+        return NULL;
     }
 
     /**
@@ -2007,6 +2148,11 @@ class ORM implements ArrayAccess {
      */
     public function save($ignore = false) {
         $query = array();
+
+        // Fix if id field is blank but not null
+        if (!($this->id() && array_key_exists($this->_get_id_column_name(), $this->_dirty_fields))) {
+            unset($this->_dirty_fields[$this->_get_id_column_name()]);
+        }
 
         // remove any expression fields as they are already baked into the query
         $values = array_values(array_diff_key($this->_dirty_fields, $this->_expr_fields));
@@ -2045,6 +2191,7 @@ class ORM implements ArrayAccess {
         }
         $this->clear_cache($this->_table_name, $this->_connection_name);
         $this->_dirty_fields = $this->_expr_fields = array();
+        $this->_clean_data = array();
         return $success;
     }
 
@@ -2239,6 +2386,6 @@ class ORM implements ArrayAccess {
     {
         $method = strtolower(preg_replace('/([a-z])([A-Z])/', '$1_$2', $name));
 
-        return call_user_func_array(array(self, $method), $arguments);
+        return call_user_func_array(array('self', $method), $arguments);
     }
 }

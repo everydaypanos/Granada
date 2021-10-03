@@ -68,7 +68,7 @@ use ArrayAccess;
 
         /**
          * Set a prefix for model names. This can be a namespace or any other
-         * abitrary prefix such as the PEAR naming convention.
+         * arbitrary prefix such as the PEAR naming convention.
          * @example Model::$auto_prefix_models = 'MyProject_MyModels_'; //PEAR
          * @example Model::$auto_prefix_models = '\MyProject\MyModels\'; //Namespaces
          * @var string
@@ -78,6 +78,7 @@ use ArrayAccess;
         /**
          * The ORM instance used by this model
          * instance to communicate with the database.
+         * @var ORM
          */
         public $orm;
 
@@ -249,7 +250,7 @@ use ArrayAccess;
 
             // Added: to determine eager load relationship parameters
             $this->relating_key = $foreign_key_name;
-            return self::factory($associated_class_name, $connection_name)->where($foreign_key_name, $where_value);
+            return self::factory($associated_class_name, $connection_name)->stash_where()->where($foreign_key_name, $where_value)->pop_where();
         }
 
         /**
@@ -299,10 +300,10 @@ use ArrayAccess;
                 //"{$associated_table_name}.primary_key = {$associated_object_id}"
                 //NOTE: primary_key is a placeholder for the actual primary key column's name
                 //in $associated_table_name
-                $desired_record = self::factory($associated_class_name, $connection_name)->where_id_is($associated_object_id);
+                $desired_record = self::factory($associated_class_name, $connection_name)->stash_where()->where_id_is($associated_object_id)->pop_where();
             } else {
                 //"{$associated_table_name}.{$foreign_key_name_in_associated_models_table} = {$associated_object_id}"
-                $desired_record = self::factory($associated_class_name, $connection_name)->where($foreign_key_name_in_associated_models_table, $associated_object_id);
+                $desired_record = self::factory($associated_class_name, $connection_name)->stash_where()->where($foreign_key_name_in_associated_models_table, $associated_object_id)->pop_where();
             }
 
             return $desired_record;
@@ -368,10 +369,12 @@ use ArrayAccess;
             $this->relating_table = $join_table_name;
 
             return self::factory($associated_class_name, $connection_name)
+                ->stash_where()
                 ->select("{$associated_table_name}.*")
                 ->join($join_table_name, array("{$associated_table_name}.{$associated_table_id_column}", '=', "{$join_table_name}.{$key_to_associated_table}"))
                 ->where("{$join_table_name}.{$key_to_base_table}", $this->$base_table_id_column)
-                ->non_associative();
+                ->non_associative()
+                ->pop_where();
         }
 
 
@@ -514,9 +517,19 @@ use ArrayAccess;
 
         /**
          * Check whether the given field has changed since the object was created or saved
+         * @param string $property
+         * @return bool
          */
         public function is_dirty($property) {
             return $this->orm->is_dirty($property);
+        }
+
+        /**
+         * Check whether the any fields have changed since the object was created or saved
+         * @return bool
+         */
+        public function is_any_dirty() {
+            return $this->orm->is_any_dirty();
         }
 
         /**
@@ -524,6 +537,30 @@ use ArrayAccess;
          */
         public function list_dirty_fields() {
             return $this->orm->list_dirty_fields();
+        }
+
+        /**
+         * Check whether the given field has not changed since the object was created or saved
+         * @return bool
+         */
+        public function is_clean($property) {
+            return !$this->is_dirty($property);
+        }
+
+        /**
+         * Get the value of this property the last time the object was created or saved
+         * @return mixed
+         */
+        public function clean_value($property) {
+            return $this->orm->clean_value($property);
+        }
+
+        /**
+         * Get the values of this object the last time it was created or saved
+         * @return array
+         */
+        public function clean_values() {
+            return $this->orm->clean_values();
         }
 
         /**
